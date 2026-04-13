@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useGetDashboardSummary,
@@ -558,6 +558,10 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
   const [selectedTemplate, setSelectedTemplate] = useState<{ id: string; name: string; message: string; headerType?: string | null; bodyVariables?: string[] } | null>(null);
   const [customMessage, setCustomMessage] = useState("");
   const [headerMediaUrl, setHeaderMediaUrl] = useState("");
+  const [headerMediaFile, setHeaderMediaFile] = useState<{ name: string; type: string; previewUrl?: string } | null>(null);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [bodyVariableValues, setBodyVariableValues] = useState<string[]>([]);
   const [useCustom, setUseCustom] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -567,6 +571,35 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
   const activeHeaderType = !useCustom ? (selectedTemplate?.headerType ?? null) : null;
   const needsMediaHeader = !!activeHeaderType && ["IMAGE", "VIDEO", "DOCUMENT"].includes(activeHeaderType);
   const templateVars = !useCustom && selectedTemplate?.bodyVariables?.length ? selectedTemplate.bodyVariables : [];
+
+  function resetMediaState() {
+    setHeaderMediaUrl("");
+    setHeaderMediaFile(null);
+    setUploadError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function handleFileUpload(file: File) {
+    setUploadingMedia(true);
+    setUploadError(null);
+    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+    setHeaderMediaFile({ name: file.name, type: file.type, previewUrl });
+    setHeaderMediaUrl("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload-media", { method: "POST", body: formData });
+      const data = await res.json() as { url?: string; error?: string };
+      if (!res.ok || !data.url) throw new Error(data.error ?? "Upload failed");
+      setHeaderMediaUrl(data.url);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+      setHeaderMediaFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } finally {
+      setUploadingMedia(false);
+    }
+  }
   const allVarsFilled = templateVars.length === 0 || (bodyVariableValues.length === templateVars.length && bodyVariableValues.every((v) => !!v.trim()));
 
   const { data: labelListData, isLoading: loadingLabels } = useGetLabelList(
@@ -598,7 +631,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
     fetchTemplates({ data: { apiToken, phoneNumberId } });
   }, [apiToken, phoneNumberId]);
 
-  const canSend = selectedLabelName && (useCustom ? !!customMessage.trim() : !!selectedTemplate) && (!needsMediaHeader || !!headerMediaUrl.trim()) && allVarsFilled && !sending;
+  const canSend = selectedLabelName && (useCustom ? !!customMessage.trim() : !!selectedTemplate) && (!needsMediaHeader || (!!headerMediaUrl.trim() && !uploadingMedia)) && allVarsFilled && !sending;
 
   function handleSend() {
     if (!canSend) return;
@@ -652,7 +685,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
           ) : (
             <select
               value={selectedLabelName}
-              onChange={(e) => { setSelectedLabelName(e.target.value); setSendResult(null); setConfirmed(false); setHeaderMediaUrl(""); setBodyVariableValues([]); }}
+              onChange={(e) => { setSelectedLabelName(e.target.value); setSendResult(null); setConfirmed(false); resetMediaState(); setBodyVariableValues([]); }}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
             >
               <option value="">— Select a label —</option>
@@ -686,7 +719,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
                 if (e.target.value === "__custom__") {
                   setSelectedTemplate(null);
                   setUseCustom(true);
-                  setHeaderMediaUrl("");
+                  resetMediaState();
                   setBodyVariableValues([]);
                   setSendResult(null);
                   setConfirmed(false);
@@ -694,7 +727,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
                   const t = templates.find((t) => t.id === e.target.value) ?? null;
                   setSelectedTemplate(t);
                   setUseCustom(false);
-                  setHeaderMediaUrl("");
+                  resetMediaState();
                   setBodyVariableValues(t?.bodyVariables?.map(() => "") ?? []);
                   setSendResult(null);
                   setConfirmed(false);
@@ -739,27 +772,91 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
         </div>
       )}
 
-      {/* Media URL input for IMAGE / VIDEO / DOCUMENT header templates */}
+      {/* Media upload for IMAGE / VIDEO / DOCUMENT header templates */}
       {needsMediaHeader && (
         <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
-          <label className="block text-xs font-medium text-amber-800 mb-1.5">
-            {activeHeaderType === "IMAGE" && "🖼 Header Image URL"}
-            {activeHeaderType === "VIDEO" && "🎬 Header Video URL"}
-            {activeHeaderType === "DOCUMENT" && "📄 Header Document URL"}
+          <p className="text-xs font-medium text-amber-800 mb-2">
+            {activeHeaderType === "IMAGE" && "🖼 Header Image"}
+            {activeHeaderType === "VIDEO" && "🎬 Header Video"}
+            {activeHeaderType === "DOCUMENT" && "📄 Header Document"}
             <span className="text-red-500 ml-1">*</span>
-          </label>
+          </p>
+
+          {/* Hidden file input */}
           <input
-            type="url"
-            value={headerMediaUrl}
-            onChange={(e) => setHeaderMediaUrl(e.target.value)}
-            placeholder={
-              activeHeaderType === "IMAGE" ? "https://example.com/image.jpg" :
-              activeHeaderType === "VIDEO" ? "https://example.com/video.mp4" :
-              "https://example.com/document.pdf"
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept={
+              activeHeaderType === "IMAGE" ? "image/jpeg,image/png,image/webp,image/gif" :
+              activeHeaderType === "VIDEO" ? "video/mp4,video/3gpp,video/quicktime" :
+              "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             }
-            className="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 bg-white"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleFileUpload(file);
+            }}
           />
-          <p className="text-xs text-amber-600 mt-1">This template requires a media URL — must be a publicly accessible link.</p>
+
+          {/* Upload area / file status */}
+          {!headerMediaFile && !uploadingMedia ? (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full flex flex-col items-center justify-center gap-2 border-2 border-dashed border-amber-300 rounded-xl py-5 px-4 text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer bg-white"
+            >
+              <Upload size={20} />
+              <span className="text-sm font-medium">
+                Click to upload {activeHeaderType === "IMAGE" ? "an image" : activeHeaderType === "VIDEO" ? "a video" : "a document"}
+              </span>
+              <span className="text-xs text-amber-500">
+                {activeHeaderType === "IMAGE" && "JPEG, PNG, WebP, GIF · max 50 MB"}
+                {activeHeaderType === "VIDEO" && "MP4, 3GPP, QuickTime · max 50 MB"}
+                {activeHeaderType === "DOCUMENT" && "PDF, Word, Excel · max 50 MB"}
+              </span>
+            </button>
+          ) : uploadingMedia ? (
+            <div className="flex items-center gap-3 p-3 bg-white border border-amber-200 rounded-xl">
+              <RefreshCw size={16} className="animate-spin text-amber-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-700 truncate">{headerMediaFile?.name}</p>
+                <p className="text-xs text-amber-600 mt-0.5">Uploading…</p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {/* Image preview */}
+              {headerMediaFile?.previewUrl && (
+                <img src={headerMediaFile.previewUrl} alt="preview" className="w-full max-h-36 object-contain rounded-lg border border-amber-200 bg-white" />
+              )}
+              <div className="flex items-center gap-3 p-3 bg-white border border-amber-200 rounded-xl">
+                <span className="text-xl shrink-0">
+                  {activeHeaderType === "IMAGE" ? "🖼" : activeHeaderType === "VIDEO" ? "🎬" : "📄"}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-700 truncate">{headerMediaFile?.name}</p>
+                  <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1">
+                    <CheckCircle2 size={10} /> Uploaded — ready to send
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={resetMediaState}
+                  className="text-gray-400 hover:text-gray-600 shrink-0"
+                  title="Remove file"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Upload error */}
+          {uploadError && (
+            <div className="flex items-center gap-2 mt-2 text-xs text-red-600">
+              <AlertCircle size={12} /> {uploadError}
+            </div>
+          )}
         </div>
       )}
 
