@@ -561,7 +561,7 @@ router.post("/templates/list", async (req, res): Promise<void> => {
     const bodyVariables = varIndices.map((i) => `{{${i}}}`);
 
     return {
-      id: String(item["template_id"] ?? item["id"] ?? ""),
+      id: String(item["id"] ?? item["template_id"] ?? ""),
       name: String(item["name"] ?? item["template_name"] ?? ""),
       message,
       headerType,
