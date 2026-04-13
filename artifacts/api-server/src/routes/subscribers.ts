@@ -488,10 +488,72 @@ router.post("/templates/list", async (req, res): Promise<void> => {
   }
 
   const items = Array.isArray(raw.message) ? raw.message as Array<Record<string, unknown>> : [];
+  const MEDIA_TYPES = ["IMAGE", "VIDEO", "DOCUMENT"];
+
+  function extractString(val: unknown): string {
+    if (val == null) return "";
+    if (typeof val === "string") return val;
+    if (typeof val === "object") {
+      const o = val as Record<string, unknown>;
+      return String(o["type"] ?? o["format"] ?? o["value"] ?? "");
+    }
+    return String(val);
+  }
+
   const templates = items.map((item) => {
-    const headerRaw = String(item["header_type"] ?? item["headerType"] ?? item["header_format"] ?? item["header"] ?? "").toUpperCase();
-    const headerType = ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerRaw) ? headerRaw : null;
-    const message = String(item["message"] ?? item["body"] ?? item["template"] ?? item["text"] ?? "");
+    // Priority list of flat field names to check for the header type.
+    // header_subtype is checked first because header_type may be "media" (generic)
+    // while header_subtype contains the actual format: "image" / "video" / "document".
+    const HEADER_KEYS = [
+      "header_subtype", "headerSubtype",
+      "header_type", "headerType", "header_format", "headerFormat",
+      "header", "type", "format", "component_type", "template_type", "mediaType", "media_type",
+    ];
+    let headerRaw = "";
+    for (const key of HEADER_KEYS) {
+      const val = extractString(item[key]).toUpperCase();
+      if (MEDIA_TYPES.includes(val)) { headerRaw = val; break; }
+    }
+
+    // body_content is the actual TWP field name for the template message body
+    let message = String(
+      item["body_content"] ?? item["message"] ?? item["body"] ?? item["template"] ?? item["text"] ?? ""
+    );
+
+    // Meta WhatsApp Business API nested components format:
+    // { components: [{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "..." }] }
+    const components = Array.isArray(item["components"])
+      ? (item["components"] as Array<Record<string, unknown>>)
+      : [];
+    if (components.length > 0 && !MEDIA_TYPES.includes(headerRaw)) {
+      const headerComp = components.find((c) => String(c["type"] ?? "").toUpperCase() === "HEADER");
+      if (headerComp) {
+        const fmt = extractString(headerComp["format"]).toUpperCase();
+        const hasHandle = !!(headerComp["example"] as Record<string, unknown> | undefined)?.["header_handle"];
+        headerRaw = MEDIA_TYPES.includes(fmt) ? fmt : hasHandle ? "IMAGE" : fmt;
+      }
+      if (!message) {
+        const bodyComp = components.find((c) => String(c["type"] ?? "").toUpperCase() === "BODY");
+        if (bodyComp) {
+          message = String(bodyComp["text"] ?? bodyComp["content"] ?? "");
+        }
+      }
+    }
+
+    // Last resort: scan every string value at the top level
+    if (!MEDIA_TYPES.includes(headerRaw)) {
+      for (const [key, val] of Object.entries(item)) {
+        if (typeof val === "string" && MEDIA_TYPES.includes(val.toUpperCase())) {
+          // Exclude the name/message fields to avoid false positives
+          if (!["name", "message", "body", "template", "text", "template_name"].includes(key)) {
+            headerRaw = val.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    const headerType = MEDIA_TYPES.includes(headerRaw) ? headerRaw : null;
 
     // Extract numbered body variables like {{1}}, {{2}}, etc.
     const varMatches = message.match(/\{\{(\d+)\}\}/g) ?? [];
@@ -499,7 +561,7 @@ router.post("/templates/list", async (req, res): Promise<void> => {
     const bodyVariables = varIndices.map((i) => `{{${i}}}`);
 
     return {
-      id: String(item["id"] ?? item["template_id"] ?? ""),
+      id: String(item["template_id"] ?? item["id"] ?? ""),
       name: String(item["name"] ?? item["template_name"] ?? ""),
       message,
       headerType,
