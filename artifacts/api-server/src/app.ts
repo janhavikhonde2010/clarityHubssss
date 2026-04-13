@@ -4,7 +4,6 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { TwpAuthError } from "./lib/twp-api";
-import { UPLOADS_DIR } from "./routes/upload";
 
 const app: Express = express();
 
@@ -31,7 +30,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use("/api/media", express.static(UPLOADS_DIR, { maxAge: "1h" }));
 app.use("/api", router);
 
 // Global JSON error handler — catches any unhandled errors from route handlers

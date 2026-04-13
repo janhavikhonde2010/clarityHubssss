@@ -47,13 +47,46 @@ router.post("/upload-media", upload.single("file"), (req, res) => {
     return;
   }
 
+  const metaPath = path.join(UPLOADS_DIR, `${req.file.filename}.meta`);
+  fs.writeFileSync(metaPath, JSON.stringify({ mimetype: req.file.mimetype, originalName: req.file.originalname }));
+
   const domain = process.env.REPLIT_DEV_DOMAIN ?? `localhost:${process.env.PORT ?? 8080}`;
   const protocol = process.env.REPLIT_DEV_DOMAIN ? "https" : "http";
   const url = `${protocol}://${domain}/api/media/${req.file.filename}`;
 
-  logger.info({ filename: req.file.filename, size: req.file.size, mimetype: req.file.mimetype }, "upload-media: file stored");
+  logger.info({ filename: req.file.filename, size: req.file.size, mimetype: req.file.mimetype, url }, "upload-media: file stored");
   res.json({ url, filename: req.file.filename, mimetype: req.file.mimetype, size: req.file.size });
 });
 
-export { UPLOADS_DIR };
+router.get("/media/:filename", (req, res): void => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(UPLOADS_DIR, filename);
+  const metaPath = path.join(UPLOADS_DIR, `${filename}.meta`);
+
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: "File not found" });
+    return;
+  }
+
+  let mimetype = "application/octet-stream";
+  if (fs.existsSync(metaPath)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as { mimetype?: string };
+      if (meta.mimetype) mimetype = meta.mimetype;
+    } catch {
+    }
+  }
+
+  res.setHeader("Content-Type", mimetype);
+  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
+  const stat = fs.statSync(filePath);
+  res.setHeader("Content-Length", stat.size);
+
+  const stream = fs.createReadStream(filePath);
+  stream.pipe(res);
+});
+
 export default router;
