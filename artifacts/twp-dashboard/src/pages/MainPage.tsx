@@ -14,6 +14,8 @@ import {
   useBulkAssignSubscribersToLabel,
   useGetTemplateList,
   useSendTemplateToLabel,
+  useGetAgentList,
+  useAssignAgentToLabel,
 } from "@workspace/api-client-react";
 import * as XLSX from "xlsx";
 import { useCredentials } from "@/contexts/CredentialsContext";
@@ -998,6 +1000,179 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
   );
 }
 
+/* ═══════════════ LABEL AGENT ASSIGN CARD ═══════════════ */
+function LabelAgentAssignCard({ apiToken, phoneNumberId }: { apiToken: string; phoneNumberId: string }) {
+  const [selectedLabel, setSelectedLabel] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [manualAgentId, setManualAgentId] = useState("");
+  const [assignResult, setAssignResult] = useState<{ total: number; succeeded: number; failed: number; errors: { phone: string; reason: string }[] } | null>(null);
+  const [showErrors, setShowErrors] = useState(false);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+
+  const { data: labelsData, isLoading: loadingLabels } = useGetLabelList(
+    { apiToken, phoneNumberId },
+    { query: { enabled: !!apiToken } }
+  );
+  const { mutate: fetchAgents, data: agentsData, isPending: loadingAgents } = useGetAgentList();
+  const { mutate: doAssign, isPending: assigning } = useAssignAgentToLabel();
+
+  useEffect(() => {
+    if (apiToken) fetchAgents({ data: { apiToken, phoneNumberId } });
+  }, [apiToken, phoneNumberId]);
+
+  useEffect(() => {
+    if (agentsData && !agentsLoaded) {
+      setAgentsLoaded(true);
+      if (agentsData.agents.length > 0) setSelectedAgentId(agentsData.agents[0].id);
+    }
+  }, [agentsData, agentsLoaded]);
+
+  const labels = labelsData?.labels ?? [];
+  const agents = agentsData?.agents ?? [];
+  const hasAgents = agents.length > 0;
+  const effectiveAgentId = hasAgents ? selectedAgentId : manualAgentId.trim();
+  const canAssign = !!selectedLabel && !!effectiveAgentId && !assigning;
+
+  function handleAssign() {
+    if (!canAssign) return;
+    setAssignResult(null);
+    setShowErrors(false);
+    doAssign(
+      { data: { apiToken, phoneNumberId, labelName: selectedLabel, agentId: effectiveAgentId } },
+      { onSuccess: (r) => { setAssignResult(r); } }
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+      <div className="flex items-center gap-3 mb-5">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "#EFF6FF" }}>
+          <Headset size={18} style={{ color: BLUE }} />
+        </div>
+        <div>
+          <h3 className="font-semibold text-gray-900 text-base">Label Agent Assignment</h3>
+          <p className="text-xs text-gray-500 mt-0.5">Assign an agent to all subscribers in a label</p>
+        </div>
+      </div>
+
+      {!assignResult ? (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            {/* Label select */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">Target Label</label>
+              {loadingLabels ? (
+                <div className="h-9 bg-gray-100 rounded-lg animate-pulse" />
+              ) : (
+                <select
+                  value={selectedLabel}
+                  onChange={(e) => setSelectedLabel(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2"
+                  style={{ focusRingColor: BLUE } as React.CSSProperties}
+                >
+                  <option value="">Select a label…</option>
+                  {labels.map((l) => (
+                    <option key={l.id} value={l.name}>{l.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* Agent select / input */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Assign To Agent
+                {loadingAgents && <span className="ml-2 text-gray-400">(loading…)</span>}
+              </label>
+              {hasAgents ? (
+                <select
+                  value={selectedAgentId}
+                  onChange={(e) => setSelectedAgentId(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none"
+                >
+                  {agents.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}{a.email ? ` (${a.email})` : ""}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="Enter agent name (e.g. Priya, Support Team)…"
+                  value={manualAgentId}
+                  onChange={(e) => setManualAgentId(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2"
+                />
+              )}
+              {!hasAgents && !loadingAgents && (
+                <p className="text-xs text-amber-600 mt-1">Enter the agent name exactly as it appears in TWP.</p>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={handleAssign}
+            disabled={!canAssign}
+            className="px-5 py-2 rounded-xl text-sm font-semibold text-white flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+            style={{ background: BLUE }}
+          >
+            {assigning ? <RefreshCw size={14} className="animate-spin" /> : <Headset size={14} />}
+            {assigning ? "Assigning…" : "Assign Agent to Label"}
+          </button>
+        </>
+      ) : (
+        <div>
+          <div className={`flex items-center gap-2 mb-3 text-sm font-semibold ${assignResult.failed === 0 ? "text-green-700" : "text-orange-600"}`}>
+            {assignResult.failed === 0 ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+            {assignResult.failed === 0
+              ? `All ${assignResult.succeeded} subscribers assigned successfully`
+              : `Finished: ${assignResult.succeeded} assigned, ${assignResult.failed} failed`}
+          </div>
+          <div className="grid grid-cols-3 gap-3 mb-4 text-center">
+            {[
+              { label: "Total", value: assignResult.total, color: GRAY },
+              { label: "Assigned", value: assignResult.succeeded, color: GREEN_D },
+              { label: "Failed", value: assignResult.failed, color: RED },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="rounded-xl p-3" style={{ background: "#F9FAFB" }}>
+                <p className="text-xl font-bold" style={{ color }}>{value}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+          {assignResult.errors.length > 0 && (
+            <div className="mb-3">
+              <button
+                className="text-xs underline mb-2"
+                style={{ color: ORANGE }}
+                onClick={() => setShowErrors((p) => !p)}
+              >
+                {showErrors ? "Hide" : "Show"} {assignResult.errors.length} failed numbers
+              </button>
+              {showErrors && (
+                <div className="text-xs space-y-1 max-h-32 overflow-y-auto">
+                  {assignResult.errors.map((e, i) => (
+                    <div key={i} className="flex gap-2 text-gray-600">
+                      <span className="font-mono">{e.phone}</span>
+                      <span className="text-gray-400">—</span>
+                      <span>{e.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <button
+            className="text-xs text-blue-600 hover:text-blue-800 underline"
+            onClick={() => { setAssignResult(null); setSelectedLabel(""); setSelectedAgentId(agents[0]?.id ?? ""); setManualAgentId(""); }}
+          >
+            Assign another label
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ═══════════════ DASHBOARD CONTENT ═══════════════ */
 function DashboardContent() {
   const { credentials, clearCredentials } = useCredentials();
@@ -1082,6 +1257,7 @@ function DashboardContent() {
         onDownload={() => labelsData && downloadCSV("label-distribution.csv", labelsData.labels)}>
         <LabelManagementCard apiToken={credentials!.apiToken} phoneNumberId={credentials!.phoneNumberId} />
         <MessageBroadcastCard apiToken={credentials!.apiToken} phoneNumberId={credentials!.phoneNumberId} />
+        <LabelAgentAssignCard apiToken={credentials!.apiToken} phoneNumberId={credentials!.phoneNumberId} />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           <ChartCard title="Reply Volume" subtitle="User vs TWP messages">
             <div className="h-[230px]">

@@ -1329,3 +1329,80 @@ export function useGetAccountInfo<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+import type {
+  AgentItem,
+  AssignAgentToLabelBody,
+  AssignAgentToLabelResponse,
+  GetAgentListBody,
+  GetAgentListResponse,
+} from "./api.schemas";
+export type { AgentItem, AssignAgentToLabelBody, AssignAgentToLabelResponse, GetAgentListBody, GetAgentListResponse };
+
+export const getAgentList = async (
+  body: GetAgentListBody,
+  options?: RequestInit,
+): Promise<GetAgentListResponse> => {
+  return customFetch<GetAgentListResponse>(`/api/agents/list`, {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+};
+
+export const useGetAgentList = <
+  TError = ErrorType<{ error: string }>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof getAgentList>>,
+    TError,
+    { data: BodyType<GetAgentListBody> },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof getAgentList>>,
+  TError,
+  { data: BodyType<GetAgentListBody> },
+  TContext
+> => {
+  return useMutation({
+    mutationFn: (props: { data: BodyType<GetAgentListBody> }) => getAgentList(props.data),
+    ...options?.mutation,
+  });
+};
+
+export const assignAgentToLabel = async (
+  body: AssignAgentToLabelBody,
+  options?: RequestInit,
+): Promise<AssignAgentToLabelResponse> => {
+  return customFetch<AssignAgentToLabelResponse>(`/api/agents/assign-to-label`, {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+};
+
+export const useAssignAgentToLabel = <
+  TError = ErrorType<{ error: string }>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof assignAgentToLabel>>,
+    TError,
+    { data: BodyType<AssignAgentToLabelBody> },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof assignAgentToLabel>>,
+  TError,
+  { data: BodyType<AssignAgentToLabelBody> },
+  TContext
+> => {
+  return useMutation({
+    mutationFn: (props: { data: BodyType<AssignAgentToLabelBody> }) => assignAgentToLabel(props.data),
+    ...options?.mutation,
+  });
+};

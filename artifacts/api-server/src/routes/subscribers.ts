@@ -572,6 +572,130 @@ router.post("/templates/list", async (req, res): Promise<void> => {
   res.json({ templates });
 });
 
+// ─── Agent List ───────────────────────────────────────────────────────────────
+router.post("/agents/list", async (req, res): Promise<void> => {
+  const { apiToken, phoneNumberId } = req.body as { apiToken?: string; phoneNumberId?: string };
+  if (!apiToken || !phoneNumberId) {
+    res.status(400).json({ error: "apiToken and phoneNumberId are required" });
+    return;
+  }
+
+  const candidates = [
+    `https://growth.thewiseparrot.club/api/v1/whatsapp/agent/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
+    `https://growth.thewiseparrot.club/api/v1/whatsapp/user/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
+    `https://growth.thewiseparrot.club/api/v1/whatsapp/team/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
+  ];
+
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!r.ok) continue;
+      const data = await r.json() as Record<string, unknown>;
+      logger.info({ endpoint: url.split("?")[0], status: data.status }, "agents/list: TWP response");
+      if (data.status === "1" && Array.isArray(data.message)) {
+        const agents = (data.message as Record<string, unknown>[]).map((a) => ({
+          id: String(a.id ?? a.agent_id ?? a.user_id ?? a.email ?? ""),
+          name: String(a.name ?? a.agent_name ?? a.full_name ?? a.username ?? ""),
+          email: String(a.email ?? a.agent_email ?? ""),
+        })).filter((a) => a.name);
+        res.json({ agents });
+        return;
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  logger.warn("agents/list: no TWP agent list endpoint found, returning empty");
+  res.json({ agents: [] });
+});
+
+// ─── Assign Agent to Label ────────────────────────────────────────────────────
+router.post("/agents/assign-to-label", async (req, res): Promise<void> => {
+  const { apiToken, phoneNumberId, labelName, agentId } = req.body as {
+    apiToken?: string;
+    phoneNumberId?: string;
+    labelName?: string;
+    agentId?: string;
+  };
+
+  if (!apiToken || !phoneNumberId || !labelName?.trim() || !agentId?.trim()) {
+    res.status(400).json({ error: "apiToken, phoneNumberId, labelName and agentId are required" });
+    return;
+  }
+
+  // Use fast subscriber fetch (no conversation processing)
+  const rawSubs = await fetchSubscribers(apiToken, phoneNumberId);
+  const target = rawSubs.filter((sub) => {
+    const labels = sub.label_names ? sub.label_names.split(",").map((l) => l.trim()).filter(Boolean) : [];
+    return labels.includes(labelName.trim());
+  });
+
+  logger.info({ labelName: labelName.trim(), totalSubs: rawSubs.length, matched: target.length }, "agents/assign-to-label: matched subscribers");
+
+  if (target.length === 0) {
+    res.json({ total: 0, succeeded: 0, failed: 0, errors: [] });
+    return;
+  }
+
+  const ASSIGN_ENDPOINTS = [
+    "https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/assign-agent",
+    "https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/chat/assign-agent",
+    "https://growth.thewiseparrot.club/api/v1/whatsapp/conversation/assign-agent",
+    "https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/agent/assign",
+  ];
+
+  let workingEndpoint: string | null = null;
+  const errors: { phone: string; reason: string }[] = [];
+  let succeeded = 0;
+
+  const BATCH = 5;
+  for (let i = 0; i < target.length; i += BATCH) {
+    const batch = target.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (sub) => {
+      const phone = sub.chat_id ?? "";
+      if (!phone) { errors.push({ phone: "unknown", reason: "No phone number" }); return; }
+
+      const endpointsToTry = workingEndpoint ? [workingEndpoint] : ASSIGN_ENDPOINTS;
+      let assigned = false;
+
+      for (const endpoint of endpointsToTry) {
+        try {
+          const params = new URLSearchParams({
+            apiToken,
+            phone_number_id: phoneNumberId,
+            phone_number: phone,
+            agent_id: agentId.trim(),
+            agent_name: agentId.trim(),
+          });
+          const r = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: params.toString(),
+            signal: AbortSignal.timeout(10_000),
+          });
+          const data = await r.json() as { status?: string; message?: string };
+          logger.info({ endpoint: endpoint.split("/").slice(-2).join("/"), phone, status: data.status, message: data.message }, "agents/assign-to-label: TWP response");
+          if (data.status === "1") {
+            if (!workingEndpoint) workingEndpoint = endpoint;
+            succeeded++;
+            assigned = true;
+            break;
+          }
+        } catch {
+          // try next endpoint
+        }
+      }
+
+      if (!assigned) {
+        errors.push({ phone, reason: "Assignment failed — endpoint not found or rejected" });
+      }
+    }));
+  }
+
+  res.json({ total: target.length, succeeded, failed: errors.length, errors });
+});
+
 router.post("/templates/send-to-label", async (req, res): Promise<void> => {
   const { apiToken, phoneNumberId, labelName, templateId, message, headerImageUrl, headerVideoUrl, headerDocumentUrl, bodyVariables } = req.body as {
     apiToken?: string;

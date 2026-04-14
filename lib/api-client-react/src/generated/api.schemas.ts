@@ -266,3 +266,37 @@ export type GetAccountInfoParams = {
   apiToken: string;
   phoneNumberId: string;
 };
+
+export interface AgentItem {
+  id: string;
+  name: string;
+  email?: string;
+}
+
+export interface GetAgentListBody {
+  apiToken: string;
+  phoneNumberId: string;
+}
+
+export interface GetAgentListResponse {
+  agents: AgentItem[];
+}
+
+export interface AssignAgentToLabelBody {
+  apiToken: string;
+  phoneNumberId: string;
+  labelName: string;
+  agentId: string;
+}
+
+export type AssignAgentToLabelResponseErrorsItem = {
+  phone: string;
+  reason: string;
+};
+
+export interface AssignAgentToLabelResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  errors: AssignAgentToLabelResponseErrorsItem[];
+}
