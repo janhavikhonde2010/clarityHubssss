@@ -581,6 +581,8 @@ router.post("/agents/list", async (req, res): Promise<void> => {
   }
 
   const candidates = [
+    `https://growth.thewiseparrot.club/api/v1/whatsapp/team-member/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
+    `https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/chat/team-member/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
     `https://growth.thewiseparrot.club/api/v1/whatsapp/agent/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
     `https://growth.thewiseparrot.club/api/v1/whatsapp/user/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
     `https://growth.thewiseparrot.club/api/v1/whatsapp/team/list?apiToken=${encodeURIComponent(apiToken)}&phone_number_id=${encodeURIComponent(phoneNumberId)}`,
@@ -638,14 +640,7 @@ router.post("/agents/assign-to-label", async (req, res): Promise<void> => {
     return;
   }
 
-  const ASSIGN_ENDPOINTS = [
-    "https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/assign-agent",
-    "https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/chat/assign-agent",
-    "https://growth.thewiseparrot.club/api/v1/whatsapp/conversation/assign-agent",
-    "https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/agent/assign",
-  ];
-
-  let workingEndpoint: string | null = null;
+  const ASSIGN_URL = "https://growth.thewiseparrot.club/api/v1/whatsapp/subscriber/chat/assign-to-team-member";
   const errors: { phone: string; reason: string }[] = [];
   let succeeded = 0;
 
@@ -656,39 +651,28 @@ router.post("/agents/assign-to-label", async (req, res): Promise<void> => {
       const phone = sub.chat_id ?? "";
       if (!phone) { errors.push({ phone: "unknown", reason: "No phone number" }); return; }
 
-      const endpointsToTry = workingEndpoint ? [workingEndpoint] : ASSIGN_ENDPOINTS;
-      let assigned = false;
-
-      for (const endpoint of endpointsToTry) {
-        try {
-          const params = new URLSearchParams({
-            apiToken,
-            phone_number_id: phoneNumberId,
-            phone_number: phone,
-            agent_id: agentId.trim(),
-            agent_name: agentId.trim(),
-          });
-          const r = await fetch(endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: params.toString(),
-            signal: AbortSignal.timeout(10_000),
-          });
-          const data = await r.json() as { status?: string; message?: string };
-          logger.info({ endpoint: endpoint.split("/").slice(-2).join("/"), phone, status: data.status, message: data.message }, "agents/assign-to-label: TWP response");
-          if (data.status === "1") {
-            if (!workingEndpoint) workingEndpoint = endpoint;
-            succeeded++;
-            assigned = true;
-            break;
-          }
-        } catch {
-          // try next endpoint
+      try {
+        const params = new URLSearchParams({
+          apiToken,
+          phone_number_id: phoneNumberId,
+          phone_number: phone,
+          team_member_id: agentId.trim(),
+        });
+        const r = await fetch(ASSIGN_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+          signal: AbortSignal.timeout(10_000),
+        });
+        const data = await r.json() as { status?: string; message?: string };
+        logger.info({ phone, status: data.status, message: data.message }, "agents/assign-to-label: TWP response");
+        if (data.status === "1") {
+          succeeded++;
+        } else {
+          errors.push({ phone, reason: data.message ?? "Assignment rejected by TWP" });
         }
-      }
-
-      if (!assigned) {
-        errors.push({ phone, reason: "Assignment failed — endpoint not found or rejected" });
+      } catch (err) {
+        errors.push({ phone, reason: err instanceof Error ? err.message : "Request failed" });
       }
     }));
   }
