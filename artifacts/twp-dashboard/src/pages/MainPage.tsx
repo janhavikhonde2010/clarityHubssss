@@ -559,6 +559,8 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
   const [selectedTemplate, setSelectedTemplate] = useState<{ id: string; name: string; message: string; headerType?: string | null; bodyVariables?: string[] } | null>(null);
   const [customMessage, setCustomMessage] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [headerMediaUrl, setHeaderMediaUrl] = useState("");
+  const [uploadingMedia, setUploadingMedia] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [bodyVariableValues, setBodyVariableValues] = useState<string[]>([]);
@@ -574,13 +576,31 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
 
   function resetMediaState() {
     setSelectedFile(null);
+    setHeaderMediaUrl("");
+    setUploadingMedia(false);
     setUploadError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  function handleFileSelect(file: File) {
+  async function handleFileSelect(file: File) {
     setSelectedFile(file);
+    setHeaderMediaUrl("");
     setUploadError(null);
+    setUploadingMedia(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/upload-media", { method: "POST", body: fd });
+      const data = await res.json() as { url?: string; error?: string };
+      if (!res.ok || !data.url) throw new Error(data.error ?? "Upload failed");
+      setHeaderMediaUrl(data.url);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } finally {
+      setUploadingMedia(false);
+    }
   }
 
   const allVarsFilled = templateVars.length === 0 || (bodyVariableValues.length === templateVars.length && bodyVariableValues.every((v) => !!v.trim()));
@@ -605,7 +625,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
     fetchTemplates({ data: { apiToken, phoneNumberId } });
   }, [apiToken, phoneNumberId]);
 
-  const canSend = selectedLabelName && (useCustom ? !!customMessage.trim() : !!selectedTemplate) && (!needsMediaHeader || !!selectedFile) && allVarsFilled && !sending;
+  const canSend = selectedLabelName && (useCustom ? !!customMessage.trim() : !!selectedTemplate) && (!needsMediaHeader || (!!headerMediaUrl && !uploadingMedia)) && allVarsFilled && !sending;
 
   async function handleSend() {
     if (!canSend) return;
@@ -613,20 +633,19 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
     setShowErrors(false);
     setSending(true);
     try {
-      const fd = new FormData();
-      fd.append("apiToken", apiToken);
-      fd.append("phoneNumberId", phoneNumberId);
-      fd.append("labelName", selectedLabelName);
+      const body: Record<string, unknown> = { apiToken, phoneNumberId, labelName: selectedLabelName };
       if (useCustom) {
-        fd.append("message", customMessage.trim());
+        body.message = customMessage.trim();
       } else {
-        fd.append("templateId", selectedTemplate!.id);
-        if (needsMediaHeader && selectedFile) {
-          fd.append("mediaFile", selectedFile, selectedFile.name);
-        }
-        bodyVariableValues.forEach((val) => fd.append("bodyVariables", val));
+        body.templateId = selectedTemplate!.id;
+        if (headerMediaUrl) body.templateHeaderMediaUrl = headerMediaUrl;
+        if (bodyVariableValues.length > 0) body.bodyVariables = bodyVariableValues;
       }
-      const resp = await fetch("/api/templates/send-to-label", { method: "POST", body: fd });
+      const resp = await fetch("/api/templates/send-to-label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
       const data = await resp.json() as { total: number; succeeded: number; failed: number; errors: { phone: string; reason: string }[] };
       setSendResult(data);
       setConfirmed(false);
@@ -780,7 +799,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
           />
 
           {/* Upload area / file status */}
-          {!selectedFile ? (
+          {!selectedFile && !uploadingMedia ? (
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -788,7 +807,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
             >
               <Upload size={20} />
               <span className="text-sm font-medium">
-                Click to select {activeHeaderType === "IMAGE" ? "an image" : activeHeaderType === "VIDEO" ? "a video" : "a document"}
+                Click to upload {activeHeaderType === "IMAGE" ? "an image" : activeHeaderType === "VIDEO" ? "a video" : "a document"}
               </span>
               <span className="text-xs text-amber-500">
                 {activeHeaderType === "IMAGE" && "JPEG, PNG, WebP, GIF · max 50 MB"}
@@ -796,10 +815,18 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
                 {activeHeaderType === "DOCUMENT" && "PDF, Word, Excel · max 50 MB"}
               </span>
             </button>
+          ) : uploadingMedia ? (
+            <div className="flex items-center gap-3 p-3 bg-white border border-amber-200 rounded-xl">
+              <RefreshCw size={16} className="animate-spin text-amber-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-700 truncate">{selectedFile?.name}</p>
+                <p className="text-xs text-amber-600 mt-0.5">Uploading…</p>
+              </div>
+            </div>
           ) : (
             <div className="space-y-2">
               {/* Image preview */}
-              {selectedFile.type.startsWith("image/") && (
+              {selectedFile?.type.startsWith("image/") && (
                 <img src={URL.createObjectURL(selectedFile)} alt="preview" className="w-full max-h-36 object-contain rounded-lg border border-amber-200 bg-white" />
               )}
               <div className="flex items-center gap-3 p-3 bg-white border border-amber-200 rounded-xl">
@@ -807,9 +834,9 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
                   {activeHeaderType === "IMAGE" ? "🖼" : activeHeaderType === "VIDEO" ? "🎬" : "📄"}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-700 truncate">{selectedFile.name}</p>
+                  <p className="text-sm font-medium text-gray-700 truncate">{selectedFile?.name}</p>
                   <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1">
-                    <CheckCircle2 size={10} /> Ready to send
+                    <CheckCircle2 size={10} /> Uploaded — ready to send
                   </p>
                 </div>
                 <button

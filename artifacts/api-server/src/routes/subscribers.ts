@@ -1,5 +1,4 @@
 import { Router, type IRouter } from "express";
-import multer from "multer";
 import {
   GetSubscribersQueryParams,
   GetDashboardSummaryQueryParams,
@@ -11,8 +10,6 @@ import { fetchSubscribers, processSubscribers, fetchAccountInfo, type ProcessedS
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
-
-const memUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // In-memory cache to avoid re-fetching on every stat endpoint call
 const cache = new Map<string, { data: ProcessedSubscriber[]; timestamp: number }>();
@@ -683,18 +680,16 @@ router.post("/agents/assign-to-label", async (req, res): Promise<void> => {
   res.json({ total: target.length, succeeded, failed: errors.length, errors });
 });
 
-router.post("/templates/send-to-label", memUpload.single("mediaFile"), async (req, res): Promise<void> => {
-  const body = req.body as Record<string, string | string[]>;
-  const apiToken       = typeof body.apiToken       === "string" ? body.apiToken       : undefined;
-  const phoneNumberId  = typeof body.phoneNumberId  === "string" ? body.phoneNumberId  : undefined;
-  const labelName      = typeof body.labelName      === "string" ? body.labelName      : undefined;
-  const templateId     = typeof body.templateId     === "string" ? body.templateId     : undefined;
-  const message        = typeof body.message        === "string" ? body.message        : undefined;
-  const mediaFile      = req.file;
-
-  // bodyVariables may arrive as a single string or an array
-  const rawVars = body.bodyVariables;
-  const bodyVariables: string[] = rawVars == null ? [] : Array.isArray(rawVars) ? rawVars : [rawVars];
+router.post("/templates/send-to-label", async (req, res): Promise<void> => {
+  const { apiToken, phoneNumberId, labelName, templateId, message, templateHeaderMediaUrl, bodyVariables } = req.body as {
+    apiToken?: string;
+    phoneNumberId?: string;
+    labelName?: string;
+    templateId?: string;
+    message?: string;
+    templateHeaderMediaUrl?: string;
+    bodyVariables?: string[];
+  };
 
   if (!apiToken || !phoneNumberId || !labelName?.trim()) {
     res.status(400).json({ error: "apiToken, phoneNumberId and labelName are required" });
@@ -715,7 +710,7 @@ router.post("/templates/send-to-label", memUpload.single("mediaFile"), async (re
     s.allLabelNames.some((l) => l === targetLabel) || s.labelName === targetLabel
   );
 
-  logger.info({ targetLabel, totalSubscribers: allSubscribers.length, matched: targets.length, hasMediaFile: !!mediaFile }, "send-to-label: matched subscribers");
+  logger.info({ targetLabel, totalSubscribers: allSubscribers.length, matched: targets.length, hasMediaUrl: !!templateHeaderMediaUrl }, "send-to-label: matched subscribers");
 
   if (targets.length === 0) {
     res.json({ total: 0, succeeded: 0, failed: 0, errors: [] });
@@ -734,34 +729,22 @@ router.post("/templates/send-to-label", memUpload.single("mediaFile"), async (re
         let rawResp: { status?: string; message?: string };
 
         if (usingTemplate) {
-          if (mediaFile) {
-            // Send file directly to TWP as multipart/form-data
-            const fd = new FormData();
-            fd.append("apiToken", apiToken);
-            fd.append("phone_number_id", phoneNumberId);
-            fd.append("template_id", templateId!.trim());
-            fd.append("phone_number", sub.phoneNumber);
-            const blob = new Blob([mediaFile.buffer], { type: mediaFile.mimetype });
-            fd.append("template_header_media_url", blob, mediaFile.originalname);
-            bodyVariables.forEach((val, idx) => fd.append(`body_variable_${idx + 1}`, val ?? ""));
-            r = await fetch(
-              "https://growth.thewiseparrot.club/api/v1/whatsapp/send/template",
-              { method: "POST", body: fd, signal: AbortSignal.timeout(30_000) }
-            );
-          } else {
-            // No media file — use URL-encoded (body-variables only templates)
-            const sendParams = new URLSearchParams({
-              apiToken,
-              phone_number_id: phoneNumberId,
-              template_id: templateId!.trim(),
-              phone_number: sub.phoneNumber,
-            });
-            bodyVariables.forEach((val, idx) => sendParams.set(`body_variable_${idx + 1}`, val ?? ""));
-            r = await fetch(
-              "https://growth.thewiseparrot.club/api/v1/whatsapp/send/template",
-              { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: sendParams.toString(), signal: AbortSignal.timeout(10_000) }
-            );
+          const sendParams = new URLSearchParams({
+            apiToken,
+            phone_number_id: phoneNumberId,
+            template_id: templateId!.trim(),
+            phone_number: sub.phoneNumber,
+          });
+          if (templateHeaderMediaUrl?.trim()) {
+            sendParams.set("template_header_media_url", templateHeaderMediaUrl.trim());
           }
+          if (Array.isArray(bodyVariables)) {
+            bodyVariables.forEach((val, idx) => sendParams.set(`body_variable_${idx + 1}`, val ?? ""));
+          }
+          r = await fetch(
+            "https://growth.thewiseparrot.club/api/v1/whatsapp/send/template",
+            { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: sendParams.toString(), signal: AbortSignal.timeout(15_000) }
+          );
           rawResp = await r.json() as { status?: string; message?: string };
         } else {
           const sendParams = new URLSearchParams({
