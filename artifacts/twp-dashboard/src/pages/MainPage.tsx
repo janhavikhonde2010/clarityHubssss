@@ -13,7 +13,6 @@ import {
   useAssignSubscriberToLabel,
   useBulkAssignSubscribersToLabel,
   useGetTemplateList,
-  useSendTemplateToLabel,
   useGetAgentList,
   useAssignAgentToLabel,
 } from "@workspace/api-client-react";
@@ -559,9 +558,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
   const [selectedLabelName, setSelectedLabelName] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<{ id: string; name: string; message: string; headerType?: string | null; bodyVariables?: string[] } | null>(null);
   const [customMessage, setCustomMessage] = useState("");
-  const [headerMediaUrl, setHeaderMediaUrl] = useState("");
-  const [headerMediaFile, setHeaderMediaFile] = useState<{ name: string; type: string; previewUrl?: string } | null>(null);
-  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [bodyVariableValues, setBodyVariableValues] = useState<string[]>([]);
@@ -569,39 +566,23 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
   const [confirmed, setConfirmed] = useState(false);
   const [sendResult, setSendResult] = useState<{ total: number; succeeded: number; failed: number; errors: { phone: string; reason: string }[] } | null>(null);
   const [showErrors, setShowErrors] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const activeHeaderType = !useCustom ? (selectedTemplate?.headerType ?? null) : null;
   const needsMediaHeader = !!activeHeaderType && ["IMAGE", "VIDEO", "DOCUMENT"].includes(activeHeaderType);
   const templateVars = !useCustom && selectedTemplate?.bodyVariables?.length ? selectedTemplate.bodyVariables : [];
 
   function resetMediaState() {
-    setHeaderMediaUrl("");
-    setHeaderMediaFile(null);
+    setSelectedFile(null);
     setUploadError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  async function handleFileUpload(file: File) {
-    setUploadingMedia(true);
+  function handleFileSelect(file: File) {
+    setSelectedFile(file);
     setUploadError(null);
-    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-    setHeaderMediaFile({ name: file.name, type: file.type, previewUrl });
-    setHeaderMediaUrl("");
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/upload-media", { method: "POST", body: formData });
-      const data = await res.json() as { url?: string; error?: string };
-      if (!res.ok || !data.url) throw new Error(data.error ?? "Upload failed");
-      setHeaderMediaUrl(data.url);
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed");
-      setHeaderMediaFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    } finally {
-      setUploadingMedia(false);
-    }
   }
+
   const allVarsFilled = templateVars.length === 0 || (bodyVariableValues.length === templateVars.length && bodyVariableValues.every((v) => !!v.trim()));
 
   const { data: labelListData, isLoading: loadingLabels } = useGetLabelList(
@@ -620,39 +601,39 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
   const { mutate: fetchTemplates, data: templatesData, isPending: loadingTemplates } = useGetTemplateList();
   const templates = templatesData?.templates ?? [];
 
-  const { mutate: doSend, isPending: sending } = useSendTemplateToLabel({
-    mutation: {
-      onSuccess: (data) => {
-        setSendResult(data);
-        setConfirmed(false);
-      },
-    },
-  });
-
   useEffect(() => {
     fetchTemplates({ data: { apiToken, phoneNumberId } });
   }, [apiToken, phoneNumberId]);
 
-  const canSend = selectedLabelName && (useCustom ? !!customMessage.trim() : !!selectedTemplate) && (!needsMediaHeader || (!!headerMediaUrl.trim() && !uploadingMedia)) && allVarsFilled && !sending;
+  const canSend = selectedLabelName && (useCustom ? !!customMessage.trim() : !!selectedTemplate) && (!needsMediaHeader || !!selectedFile) && allVarsFilled && !sending;
 
-  function handleSend() {
+  async function handleSend() {
     if (!canSend) return;
     setSendResult(null);
     setShowErrors(false);
-    if (useCustom) {
-      doSend({ data: { apiToken, phoneNumberId, labelName: selectedLabelName, message: customMessage.trim() } });
-    } else {
-      const mediaUrl = headerMediaUrl.trim();
-      doSend({
-        data: {
-          apiToken,
-          phoneNumberId,
-          labelName: selectedLabelName,
-          templateId: selectedTemplate!.id,
-          ...(mediaUrl && (activeHeaderType === "IMAGE" || activeHeaderType === "VIDEO" || activeHeaderType === "DOCUMENT") ? { templateHeaderMediaUrl: mediaUrl } : {}),
-          ...(bodyVariableValues.length > 0 ? { bodyVariables: bodyVariableValues } : {}),
-        },
-      });
+    setSending(true);
+    try {
+      const fd = new FormData();
+      fd.append("apiToken", apiToken);
+      fd.append("phoneNumberId", phoneNumberId);
+      fd.append("labelName", selectedLabelName);
+      if (useCustom) {
+        fd.append("message", customMessage.trim());
+      } else {
+        fd.append("templateId", selectedTemplate!.id);
+        if (needsMediaHeader && selectedFile) {
+          fd.append("mediaFile", selectedFile, selectedFile.name);
+        }
+        bodyVariableValues.forEach((val) => fd.append("bodyVariables", val));
+      }
+      const resp = await fetch("/api/templates/send-to-label", { method: "POST", body: fd });
+      const data = await resp.json() as { total: number; succeeded: number; failed: number; errors: { phone: string; reason: string }[] };
+      setSendResult(data);
+      setConfirmed(false);
+    } catch {
+      setSendResult({ total: 0, succeeded: 0, failed: 0, errors: [{ phone: "-", reason: "Network error — please try again" }] });
+    } finally {
+      setSending(false);
     }
   }
 
@@ -794,12 +775,12 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
             }
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) void handleFileUpload(file);
+              if (file) handleFileSelect(file);
             }}
           />
 
           {/* Upload area / file status */}
-          {!headerMediaFile && !uploadingMedia ? (
+          {!selectedFile ? (
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -807,7 +788,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
             >
               <Upload size={20} />
               <span className="text-sm font-medium">
-                Click to upload {activeHeaderType === "IMAGE" ? "an image" : activeHeaderType === "VIDEO" ? "a video" : "a document"}
+                Click to select {activeHeaderType === "IMAGE" ? "an image" : activeHeaderType === "VIDEO" ? "a video" : "a document"}
               </span>
               <span className="text-xs text-amber-500">
                 {activeHeaderType === "IMAGE" && "JPEG, PNG, WebP, GIF · max 50 MB"}
@@ -815,28 +796,20 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
                 {activeHeaderType === "DOCUMENT" && "PDF, Word, Excel · max 50 MB"}
               </span>
             </button>
-          ) : uploadingMedia ? (
-            <div className="flex items-center gap-3 p-3 bg-white border border-amber-200 rounded-xl">
-              <RefreshCw size={16} className="animate-spin text-amber-500 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-700 truncate">{headerMediaFile?.name}</p>
-                <p className="text-xs text-amber-600 mt-0.5">Uploading…</p>
-              </div>
-            </div>
           ) : (
             <div className="space-y-2">
               {/* Image preview */}
-              {headerMediaFile?.previewUrl && (
-                <img src={headerMediaFile.previewUrl} alt="preview" className="w-full max-h-36 object-contain rounded-lg border border-amber-200 bg-white" />
+              {selectedFile.type.startsWith("image/") && (
+                <img src={URL.createObjectURL(selectedFile)} alt="preview" className="w-full max-h-36 object-contain rounded-lg border border-amber-200 bg-white" />
               )}
               <div className="flex items-center gap-3 p-3 bg-white border border-amber-200 rounded-xl">
                 <span className="text-xl shrink-0">
                   {activeHeaderType === "IMAGE" ? "🖼" : activeHeaderType === "VIDEO" ? "🎬" : "📄"}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-700 truncate">{headerMediaFile?.name}</p>
+                  <p className="text-sm font-medium text-gray-700 truncate">{selectedFile.name}</p>
                   <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1">
-                    <CheckCircle2 size={10} /> Uploaded — ready to send
+                    <CheckCircle2 size={10} /> Ready to send
                   </p>
                 </div>
                 <button
