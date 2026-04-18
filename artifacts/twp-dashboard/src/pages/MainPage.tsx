@@ -649,9 +649,7 @@ function MessageBroadcastCard({ apiToken, phoneNumberId }: { apiToken: string; p
           phoneNumberId,
           labelName: selectedLabelName,
           templateId: selectedTemplate!.id,
-          ...(activeHeaderType === "IMAGE" && mediaUrl ? { headerImageUrl: mediaUrl } : {}),
-          ...(activeHeaderType === "VIDEO" && mediaUrl ? { headerVideoUrl: mediaUrl } : {}),
-          ...(activeHeaderType === "DOCUMENT" && mediaUrl ? { headerDocumentUrl: mediaUrl } : {}),
+          ...(mediaUrl && (activeHeaderType === "IMAGE" || activeHeaderType === "VIDEO" || activeHeaderType === "DOCUMENT") ? { templateHeaderMediaUrl: mediaUrl } : {}),
           ...(bodyVariableValues.length > 0 ? { bodyVariables: bodyVariableValues } : {}),
         },
       });

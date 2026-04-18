@@ -297,19 +297,11 @@ export const SendTemplateToLabelBody = zod.object({
     .describe(
       "Plain text message (only used when sending a custom message instead of a template)",
     ),
-  headerImageUrl: zod
-    .string()
-    .optional()
-    .describe("Image URL for templates that have an IMAGE header component"),
-  headerVideoUrl: zod
-    .string()
-    .optional()
-    .describe("Video URL for templates that have a VIDEO header component"),
-  headerDocumentUrl: zod
+  templateHeaderMediaUrl: zod
     .string()
     .optional()
     .describe(
-      "Document URL for templates that have a DOCUMENT header component",
+      "Media URL for templates that have an IMAGE, VIDEO, or DOCUMENT header component",
     ),
   bodyVariables: zod
     .array(zod.string())

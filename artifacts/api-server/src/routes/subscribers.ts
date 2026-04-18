@@ -681,15 +681,13 @@ router.post("/agents/assign-to-label", async (req, res): Promise<void> => {
 });
 
 router.post("/templates/send-to-label", async (req, res): Promise<void> => {
-  const { apiToken, phoneNumberId, labelName, templateId, message, headerImageUrl, headerVideoUrl, headerDocumentUrl, bodyVariables } = req.body as {
+  const { apiToken, phoneNumberId, labelName, templateId, message, templateHeaderMediaUrl, bodyVariables } = req.body as {
     apiToken?: string;
     phoneNumberId?: string;
     labelName?: string;
     templateId?: string;
     message?: string;
-    headerImageUrl?: string;
-    headerVideoUrl?: string;
-    headerDocumentUrl?: string;
+    templateHeaderMediaUrl?: string;
     bodyVariables?: string[];
   };
 
@@ -737,9 +735,7 @@ router.post("/templates/send-to-label", async (req, res): Promise<void> => {
             template_id: templateId!.trim(),
             phone_number: sub.phoneNumber,
           });
-          if (headerImageUrl?.trim()) sendParams.set("header_image_url", headerImageUrl.trim());
-          if (headerVideoUrl?.trim()) sendParams.set("header_video_url", headerVideoUrl.trim());
-          if (headerDocumentUrl?.trim()) sendParams.set("header_document_url", headerDocumentUrl.trim());
+          if (templateHeaderMediaUrl?.trim()) sendParams.set("template_header_media_url", templateHeaderMediaUrl.trim());
           if (Array.isArray(bodyVariables)) {
             bodyVariables.forEach((val, idx) => {
               sendParams.set(`body_variable_${idx + 1}`, val ?? "");
